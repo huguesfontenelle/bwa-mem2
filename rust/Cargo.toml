@@ -1,0 +1,29 @@
+[package]
+name = "bwa-mem2"
+version = "2.2.1"
+edition = "2021"
+description = "BWA-MEM2: fast and accurate long-read DNA aligner (Rust port)"
+license = "MIT"
+authors = [
+    "Vasimuddin Md <vasimuddin.md@intel.com>",
+    "Sanchit Misra <sanchit.misra@intel.com>",
+    "Heng Li <hli@jimmy.harvard.edu>",
+]
+
+[[bin]]
+name = "bwa-mem2"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+rayon = "1.8"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+byteorder = "1"
+flate2 = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

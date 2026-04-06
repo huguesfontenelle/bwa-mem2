@@ -287,6 +287,12 @@ pub struct MemAlnReg {
     pub frac_rep: f32,
     /// Hash of the alignment region, used for deduplication.
     pub hash: u64,
+    /// Mapping quality (0–60).
+    pub mapq: u8,
+    /// CIGAR string in BAM encoding, if already computed.
+    pub cigar: Vec<u32>,
+    /// Number of CIGAR ops (0 if not yet computed).
+    pub n_cigar: i32,
 }
 
 impl Default for MemAlnReg {
@@ -312,6 +318,9 @@ impl Default for MemAlnReg {
             is_alt: false,
             frac_rep: 0.0,
             hash: 0,
+            mapq: 0,
+            cigar: Vec::new(),
+            n_cigar: 0,
         }
     }
 }

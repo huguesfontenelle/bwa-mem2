@@ -421,13 +421,12 @@ pub fn build_fm_index(seq: &[u8], seq_len: i64) -> Result<FmIndex> {
 /// 1. Pack the FASTA into a binary sequence via `BntSeq::fasta_to_bntseq`.
 /// 2. Build the FM-index from the packed sequence.
 /// 3. Save the index to disk via `FmIndex::save`.
-pub fn build_index(prefix: &str) -> Result<()> {
+pub fn build_index(fasta: &str, prefix: &str) -> Result<()> {
     eprintln!("[build_index] Packing FASTA ...");
-    let bntseq = BntSeq::fasta_to_bntseq(prefix)
-        .with_context(|| format!("Failed to pack FASTA for prefix '{}'", prefix))?;
+    let (bntseq, pac) = BntSeq::fasta_to_bntseq(fasta, prefix)
+        .with_context(|| format!("Failed to pack FASTA '{}'", fasta))?;
 
-    let seq = bntseq.packed_seq();
-    let seq_len = bntseq.seq_len();
+    let seq_len = bntseq.l_pac;
 
     eprintln!("[build_index] Reference length: {} bp", seq_len);
 
@@ -435,8 +434,15 @@ pub fn build_index(prefix: &str) -> Result<()> {
         bail!("build_index: reference sequence has zero length");
     }
 
+    // Unpack from 4-bases-per-byte to 1-base-per-byte (0..3)
+    let seq: Vec<u8> = (0..seq_len).map(|i| {
+        let byte_idx = (i >> 2) as usize;
+        let shift = ((3 - (i & 3)) * 2) as u32;
+        if byte_idx < pac.len() { (pac[byte_idx] >> shift) & 3 } else { 0 }
+    }).collect();
+
     eprintln!("[build_index] Building FM-index ...");
-    let fm_index = build_fm_index(seq, seq_len)
+    let fm_index = build_fm_index(&seq, seq_len)
         .context("Failed to build FM-index")?;
 
     eprintln!("[build_index] Saving FM-index to disk ...");

@@ -63,11 +63,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         liblzma5 \
         libncurses6 \
         libssl3 \
+        procps \
         zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder      /build/target/release/bwa-mem2 /usr/local/bin/bwa-mem2
 COPY --from=samtools-builder /opt/samtools/bin/samtools  /usr/local/bin/samtools
-
-ENTRYPOINT ["bwa-mem2"]
-CMD ["--help"]

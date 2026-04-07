@@ -16,7 +16,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 
 use anyhow::{bail, Result};
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 
 // ---------------------------------------------------------------------------
 // Public record type
@@ -330,10 +330,12 @@ pub fn open_seq_file(path: &str) -> Result<Box<dyn BufRead>> {
     };
 
     if is_gz {
-        // Re-open a fresh file handle for GzDecoder (the probe consumed nothing).
+        // Re-open a fresh file handle (the probe consumed nothing).
+        // Use MultiGzDecoder to handle multi-member gzip files (e.g. bgzf,
+        // concatenated gzip blocks from Illumina demultiplexers).
         let file2 = File::open(path)
             .map_err(|e| anyhow::anyhow!("cannot re-open '{}': {}", path, e))?;
-        Ok(Box::new(BufReader::new(GzDecoder::new(file2))))
+        Ok(Box::new(BufReader::new(MultiGzDecoder::new(file2))))
     } else {
         Ok(Box::new(BufReader::new(file)))
     }

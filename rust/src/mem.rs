@@ -206,7 +206,12 @@ fn get_ref_bases(pac: &[u8], l_pac: i64, beg: i64, end: i64) -> Vec<u8> {
 // Chain to alignment regions
 // ---------------------------------------------------------------------------
 
-/// Extend one chain into one or more alignment regions using banded SW.
+/// Extend one chain into an alignment region using banded SW over the full query.
+///
+/// We use the chain's leftmost and rightmost seeds to estimate where the full
+/// query maps on the reference, then run a single banded SW alignment covering
+/// the complete query sequence.  This is equivalent to the left-extension +
+/// right-extension strategy in bwa-mem's C code for the common case.
 pub fn mem_chain2aln(
     opt: &MemOpt,
     bns: &BntSeq,
@@ -220,81 +225,83 @@ pub fn mem_chain2aln(
     }
 
     let qlen = query.len() as i32;
-    let mut regs: Vec<MemAlnReg> = Vec::new();
+    let w = opt.w;
 
-    for seed in &chain.seeds {
-        if seed.done { continue; }
+    // Anchor: use the seed with the best (longest) match as the pivot.
+    let anchor = chain.seeds.iter().max_by_key(|s| s.len).unwrap();
 
-        // Determine the band width
-        let w = opt.w.max(seed.len / 2);
+    // Leftmost and rightmost seeds in query coordinates.
+    let seed_first = chain.seeds.iter().min_by_key(|s| s.qbeg).unwrap();
+    let seed_last  = chain.seeds.iter().max_by_key(|s| s.qbeg + s.len).unwrap();
+    let q_cov_beg = seed_first.qbeg;
+    let q_cov_end = seed_last.qbeg + seed_last.len;
 
-        // Reference region to align: extend by band width around the seed
-        let ref_beg = (seed.rbeg - w as i64).max(0);
-        let ref_end = (seed.rbeg + seed.len as i64 + w as i64).min(2 * bns.l_pac);
+    // Reference region: extend the chain's reference span to cover the full
+    // query (bases before q_cov_beg and after q_cov_end) plus band slack.
+    let ref_beg_est = seed_first.rbeg - q_cov_beg as i64;
+    let ref_end_est = seed_last.rbeg + seed_last.len as i64 + (qlen - q_cov_end) as i64;
 
-        // Query region: with some padding
-        let q_beg = (seed.qbeg - w).max(0) as usize;
-        let q_end = ((seed.qbeg + seed.len + w) as usize).min(query.len());
+    let ref_beg = (ref_beg_est - w as i64).max(0);
+    let ref_end = (ref_end_est + w as i64).min(2 * bns.l_pac);
 
-        if q_beg >= q_end || ref_beg >= ref_end { continue; }
+    if ref_beg >= ref_end { return Vec::new(); }
 
-        let ref_seq = get_ref_bases(pac, bns.l_pac, ref_beg, ref_end);
-        let qslice = &query_2bit[q_beg..q_end];
+    let ref_seq = get_ref_bases(pac, bns.l_pac, ref_beg, ref_end);
 
-        let sw_res = banded_sw(
-            qslice,
-            &ref_seq,
-            (q_end - q_beg) as i32,
-            ref_seq.len() as i32,
-            0,
-            opt.o_del,
-            opt.e_del,
-            opt.o_ins,
-            opt.e_ins,
-            w,
-            &opt.mat,
-            5,
-        );
+    // Align the FULL query (2-bit encoded) against the reference window.
+    let sw_res = banded_sw(
+        query_2bit,
+        &ref_seq,
+        qlen,
+        ref_seq.len() as i32,
+        0,
+        opt.o_del,
+        opt.e_del,
+        opt.o_ins,
+        opt.e_ins,
+        w,
+        &opt.mat,
+        5,
+    );
 
-        if sw_res.score < opt.t { continue; }
-
-        let rb = ref_beg + sw_res.rb as i64;
-        let re = ref_beg + sw_res.re as i64;
-        let qb = q_beg as i32 + sw_res.qb;
-        let qe = q_beg as i32 + sw_res.qe;
-
-        let rid = bns.pos2rid(if rb < bns.l_pac { rb } else { 2 * bns.l_pac - 1 - rb });
-
-        let mut reg = MemAlnReg {
-            rb,
-            re,
-            qb,
-            qe,
-            rid,
-            score: sw_res.score,
-            truesc: sw_res.score,
-            sub: 0,
-            alt_sc: 0,
-            csub: 0,
-            sub_n: 0,
-            w,
-            seedcov: seed.len,
-            secondary: -1,
-            secondary_all: -1,
-            seedlen0: seed.len,
-            n_comp: 1,
-            is_alt: false,
-            frac_rep: chain.frac_rep,
-            hash: 0,
-            cigar: sw_res.cigar,
-            n_cigar: sw_res.n_cigar,
-            mapq: 0,
-        };
-
-        regs.push(reg);
+    if sw_res.score < opt.t {
+        return Vec::new();
     }
 
-    regs
+    let rb = ref_beg + sw_res.rb as i64;
+    let re = ref_beg + sw_res.re as i64;
+    let qb = sw_res.qb;
+    let qe = sw_res.qe;
+
+    let rid = bns.pos2rid(if rb < bns.l_pac { rb } else { 2 * bns.l_pac - 1 - rb });
+
+    let seed_cov: i32 = chain.seeds.iter().map(|s| s.len).sum();
+
+    vec![MemAlnReg {
+        rb,
+        re,
+        qb,
+        qe,
+        rid,
+        score: sw_res.score,
+        truesc: sw_res.score,
+        sub: 0,
+        alt_sc: 0,
+        csub: 0,
+        sub_n: 0,
+        w,
+        seedcov: seed_cov,
+        secondary: -1,
+        secondary_all: -1,
+        seedlen0: anchor.len,
+        n_comp: 1,
+        is_alt: false,
+        frac_rep: chain.frac_rep,
+        hash: 0,
+        cigar: sw_res.cigar,
+        n_cigar: sw_res.n_cigar,
+        mapq: 0,
+    }]
 }
 
 // ---------------------------------------------------------------------------

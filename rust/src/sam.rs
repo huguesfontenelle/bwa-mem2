@@ -488,10 +488,18 @@ pub fn mem_aln2sam(
             let m_ann = &bns.anns[m.rid as usize];
             let m_pos = m.pos - m_ann.offset + 1;
 
+            // Mate is mapped: clear MATE_UNMAPPED, set MATE_REVERSE if needed.
+            flag &= !0x8u32;
+            if m.is_rev {
+                flag |= 0x20;
+            } else {
+                flag &= !0x20u32;
+            }
+
             // RNEXT: "=" if same chromosome, else the actual name
             let rnext = if m.rid == aln.rid { "=".to_string() } else { m_ann.name.clone() };
 
-            // TLEN: signed insert size (read1 positive, read2 negative)
+            // TLEN: signed insert size
             let tlen_val: i64 = if aln.rid == m.rid {
                 let read_end = pos_1based + seq.seq.len() as i64 - 1;
                 let mate_end = m_pos + seq.seq.len() as i64 - 1; // approximate
@@ -505,11 +513,29 @@ pub fn mem_aln2sam(
             };
             (rnext, m_pos, tlen_val)
         } else {
-            // Mate unmapped
-            ("*".to_string(), 0i64, 0i64)
+            // Mate is unmapped: set MATE_UNMAPPED flag.
+            if (flag & 0x1) != 0 {
+                flag |= 0x8;
+            }
+            // Convention: RNEXT/PNEXT point to this read's own position so the
+            // mate can be located (matches bwa-mem2 C behaviour).
+            let rnext = if rname != "*" { "=".to_string() } else { "*".to_string() };
+            let pnext = if rname != "*" { pos_1based } else { 0i64 };
+            (rnext, pnext, 0i64)
         }
     } else {
-        ("*".to_string(), 0i64, 0i64)
+        // No mate (single-end, or paired read whose mate has no alignment object).
+        if (flag & 0x1) != 0 {
+            // Paired read with no mate alignment → mate is unmapped.
+            flag |= 0x8;
+        }
+        let rnext = if (flag & 0x1) != 0 && rname != "*" {
+            "=".to_string()
+        } else {
+            "*".to_string()
+        };
+        let pnext = if (flag & 0x1) != 0 && rname != "*" { pos_1based } else { 0i64 };
+        (rnext, pnext, 0i64)
     };
 
     // -----------------------------------------------------------------------
@@ -603,21 +629,29 @@ pub fn write_unmapped_sam(
     let mut sam_flag = flag as u32;
     sam_flag |= 0x4; // unmapped
 
-    let (mate_rname, mate_pos): (&str, i64) = if let Some(m) = mate {
+    let (mate_rname, mate_pos): (String, i64) = if let Some(m) = mate {
         if m.rid >= 0 && (m.rid as usize) < bns.anns.len() {
             let m_ann = &bns.anns[m.rid as usize];
             let m_pos = m.pos - m_ann.offset + 1;
-            // Mate mapped: set 0x20 if mate is reverse
+            // Mate is mapped: clear MATE_UNMAPPED, set MATE_REVERSE if needed.
+            sam_flag &= !0x8u32;
             if m.is_rev {
                 sam_flag |= 0x20;
+            } else {
+                sam_flag &= !0x20u32;
             }
-            (m_ann.name.as_str(), m_pos)
+            (m_ann.name.clone(), m_pos)
         } else {
-            sam_flag |= 0x8; // mate also unmapped
-            ("*", 0)
+            // Mate also unmapped.
+            sam_flag |= 0x8;
+            ("*".to_string(), 0)
         }
     } else {
-        ("*", 0)
+        // No mate object: if paired, mate is unmapped.
+        if (sam_flag & 0x1) != 0 {
+            sam_flag |= 0x8;
+        }
+        ("*".to_string(), 0)
     };
 
     let seq_str = String::from_utf8_lossy(&seq.seq).into_owned();

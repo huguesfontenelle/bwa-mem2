@@ -219,12 +219,33 @@ fn sais_recursive(s: &[u8], alphabet_size: usize) -> Vec<i64> {
 ///
 /// The input alphabet for DNA is `{0,1,2,3}` plus sentinel `4`.
 /// Returns `Vec<i64>` of length `s.len()`.
+///
+/// # Sentinel convention
+///
+/// SA-IS requires the sentinel to be **strictly smaller** than every other
+/// character.  In our DNA+sentinel encoding the sentinel has value `4`
+/// (the *largest* value), so we remap the alphabet before invoking the
+/// recursion:
+///
+/// ```text
+/// sentinel (max_val) → 0
+/// every other character c → c + 1
+/// ```
+///
+/// This preserves relative ordering among non-sentinel characters and
+/// guarantees that the sentinel sorts first.  The suffix-array positions
+/// returned are indices into the *original* (un-remapped) string, so callers
+/// do not need to adjust them.
 pub fn build_suffix_array(s: &[u8]) -> Vec<i64> {
     if s.is_empty() {
         return Vec::new();
     }
-    // DNA alphabet: 0..=4 (4 is sentinel '$').  Alphabet size = 5.
-    sais_recursive(s, 5)
+    let max_val = *s.iter().max().unwrap() as usize;
+    // Remap: sentinel (max_val) → 0; every other value c → c + 1.
+    let remapped: Vec<u8> = s.iter()
+        .map(|&c| if c as usize == max_val { 0u8 } else { c + 1 })
+        .collect();
+    sais_recursive(&remapped, max_val + 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -482,25 +503,32 @@ mod tests {
     /// Verify SA for a repeated pattern.
     #[test]
     fn sa_is_repeated() {
-        // "AABB" + sentinel: [0,0,1,1,4]
-        // Suffixes sorted:
-        //   4: $           -> pos 4
-        //   0: AABB$       -> pos 0
-        //   1: ABB$        -> pos 1
-        //   2: BB$         -> pos 2
-        //   3: B$          -> pos 3
-        // SA = [4, 0, 1, 2, 3]  (A=0, B=1, sentinel=4)
+        // "AABB" + sentinel: [0,0,1,1,4]  (A=0, B=1, $=4)
+        //
+        // Treating $ as the SMALLEST character the sorted suffixes are:
+        //   pos 4: [$]                 → name "$"
+        //   pos 0: [A,A,B,B,$]        → "AABB$"
+        //   pos 1: [A,B,B,$]          → "ABB$"
+        //   pos 3: [B,$]              → "B$"    (B$ < BB$ because $ < B)
+        //   pos 2: [B,B,$]            → "BB$"
+        // Expected SA = [4, 0, 1, 3, 2]
         let s: Vec<u8> = vec![0, 0, 1, 1, 4];
         let sa = build_suffix_array(&s);
-        // Verify correctness: suffixes should be in lexicographic order.
+        assert_eq!(sa, vec![4, 0, 1, 3, 2],
+            "SA mismatch for [0,0,1,1,4]: got {:?}", sa);
+
+        // Also verify ordering with a sentinel-aware comparator.
+        // Remap so that the sentinel (4) sorts as 0 and other chars shift up.
+        let remap = |c: u8| if c == 4 { 0u8 } else { c + 1 };
+        let remapped: Vec<u8> = s.iter().map(|&c| remap(c)).collect();
         let n = s.len();
         for i in 1..n {
             let a = sa[i - 1] as usize;
             let b = sa[i] as usize;
             assert!(
-                s[a..] <= s[b..],
+                remapped[a..] <= remapped[b..],
                 "SA not sorted at index {}: sa[{}]={} vs sa[{}]={}",
-                i, i-1, a, i, b
+                i, i - 1, a, i, b
             );
         }
     }

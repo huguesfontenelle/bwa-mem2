@@ -92,10 +92,21 @@ impl BntSeq {
         let mut anns: Vec<BntAnn> = Vec::with_capacity(n_seqs as usize);
 
         for i in 0..n_seqs {
-            // First line: "offset len n_ambs"
+            // First line: "gi name [anno]"  (C format: gi and name first, optional anno)
             line.clear();
             ann_reader.read_line(&mut line)
                 .with_context(|| format!("reading .ann record {} line 1", i))?;
+            let p: Vec<&str> = line.splitn(3, char::is_whitespace).collect();
+            let gi: u32 = p.first().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+            let name = p.get(1).map(|s| s.trim().to_string()).unwrap_or_default();
+            let raw_anno = p.get(2).map(|s| s.trim().to_string()).unwrap_or_default();
+            // C writes "(null)" when anno is empty
+            let anno = if raw_anno == "(null)" { String::new() } else { raw_anno };
+
+            // Second line: "offset len n_ambs"
+            line.clear();
+            ann_reader.read_line(&mut line)
+                .with_context(|| format!("reading .ann record {} line 2", i))?;
             let p: Vec<&str> = line.split_whitespace().collect();
             if p.len() < 3 {
                 bail!("malformed .ann record {}: '{}'", i, line.trim());
@@ -104,17 +115,7 @@ impl BntSeq {
             let len: i32 = p[1].parse().context("parsing len")?;
             let n_ambs: i32 = p[2].parse().context("parsing n_ambs")?;
 
-            // Second line: "gi is_alt name anno"
-            line.clear();
-            ann_reader.read_line(&mut line)
-                .with_context(|| format!("reading .ann record {} line 2", i))?;
-            let p: Vec<&str> = line.splitn(4, char::is_whitespace).collect();
-            let gi: u32 = p.first().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
-            let is_alt: i32 = p.get(1).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
-            let name = p.get(2).map(|s| s.trim().to_string()).unwrap_or_default();
-            let anno = p.get(3).map(|s| s.trim().to_string()).unwrap_or_default();
-
-            anns.push(BntAnn { offset, len, n_ambs, gi, is_alt, name, anno });
+            anns.push(BntAnn { offset, len, n_ambs, gi, is_alt: 0, name, anno });
         }
 
         // --- .amb file ---
@@ -157,8 +158,13 @@ impl BntSeq {
         let mut w = BufWriter::new(ann_file);
         writeln!(w, "{} {} {}", self.l_pac, self.n_seqs, self.seed)?;
         for ann in &self.anns {
+            // Match C format: "gi name [anno]" then "offset len n_ambs"
+            if ann.anno.is_empty() {
+                writeln!(w, "{} {}", ann.gi, ann.name)?;
+            } else {
+                writeln!(w, "{} {} {}", ann.gi, ann.name, ann.anno)?;
+            }
             writeln!(w, "{} {} {}", ann.offset, ann.len, ann.n_ambs)?;
-            writeln!(w, "{} {} {} {}", ann.gi, ann.is_alt, ann.name, ann.anno)?;
         }
         w.flush()?;
 
